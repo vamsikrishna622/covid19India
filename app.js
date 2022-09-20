@@ -1,20 +1,4 @@
-const express = require("express");
-const path = require("path");
-
-const app = express();
-app.use(express.json());
-
-const dbPath = path.join(__dirname, "covid19India.db");
-
-const { open } = require("sqlite");
-const sqlite3 = require("sqlite3");
-
-let db = null;
-const initializeDbAndServer = async () => {
-  try {
-    db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database,
+driver: sqlite3.Database,
     });
     app.listen(3000, () => {
       console.log("Server Running at http://localhost:3000/");
@@ -33,7 +17,20 @@ app.get("/states/", async (request, response) => {
     FROM state;
     `;
   const allStatesList = await db.all(getAllStates);
-  response.send(allStatesList);
+  const convertDbObjToResponseObj = (allStatesList) => {
+    let statesList = [];
+    for (eachState of allStatesList) {
+      const state = {
+        stateId: eachState.state_id,
+        stateName: eachState.state_name,
+        population: eachState.population,
+      };
+      statesList.push(state);
+    }
+    return statesList;
+  };
+  const statesList = convertDbObjToResponseObj(allStatesList);
+  response.send(statesList);
 });
 
 ///API 2
@@ -47,7 +44,12 @@ app.get("/states/:stateId/", async (request, response) => {
     WHERE
     state_id = ${stateId};
     `;
-  const state = await db.get(getState);
+  let state = await db.get(getState);
+  state = {
+    stateId: state.state_id,
+    stateName: state.state_name,
+    population: state.population,
+  };
   response.send(state);
 });
 
@@ -64,63 +66,75 @@ app.post("/districts/", async (request, response) => {
     deaths,
   } = districtDetails;
 
-  const addDistrict = `
+  const addDistrictQuery = `
   INSERT INTO
-  district(districtName,
-    stateId,
+  district
+    (district_name,
+    state_id,
     cases,
     cured,
     active,
     deaths)
-    VALUES
-    '${districtName}',
+    VALUES(
+    "${districtName}",
     ${stateId},
     ${cases},
     ${cured},
     ${active},
-    ${deaths};
-  `;
-  const district = await db.run(addDistrict);
-  const districtId = district.lastId;
-  response.send(District Successfully Added);
+    ${deaths}
+    );
+    `;
+  const dbResponse = await db.run(addDistrictQuery);
+  const districtId = dbResponse.lastId;
+  response.send("District Successfully Added");
 });
 
-
 ///API 4
-app.get("/districts/:districtId/", async (request, response) {
-    let districtId = request.params;
-    districtId = parseInt(districtId);
+app.get("/districts/:districtId/", async (request, response) => {
+  let { districtId } = request.params;
+  districtId = parseInt(districtId);
 
-    const getDistrictQuery = `
+  const getDistrictQuery = `
     SELECT *
-    FROM district
+    FROM
+    district
     WHERE
     district_id = ${districtId};
     `;
-    const district = await db.get(getDistrictQuery);
-    response.send(district);
-})
+  const dbResponse = await db.get(getDistrictQuery);
+  const district = {
+    districtId: dbResponse.district_id,
+    districtName: dbResponse.district_name,
+    stateId: dbResponse.state_id,
+    cases: dbResponse.cases,
+    cured: dbResponse.cured,
+    active: dbResponse.active,
+    deaths: dbResponse.deaths,
+  };
+
+  response.send(district);
+});
 
 ///API 5
-app.delete("/districts/:districtId/", (request, response) => {
-    let districtId = request.params;
-    districtId = parseInt(districtId);
+app.delete("/districts/:districtId/", async (request, response) => {
+  let { districtId } = request.params;
+  districtId = parseInt(districtId);
 
-    const deleteDistrictQuery = `
+  const deleteDistrictQuery = `
     DELETE
     FROM district
     WHERE
     district_id = ${districtId};
     `;
-    await db.run(deleteDistrictQuery);
-    response.send("District Removed");
-})
+  await db.run(deleteDistrictQuery);
+  response.send("District Removed");
+});
 
 ///API 6
 app.put("/districts/:districtId", async (request, response) => {
-    const districtDetails = request.body;
-    let districtId = request.params;
-    districtId = parseInt(districtId);
+  const districtDetails = request.body;
+  let { districtId } = request.params;
+  districtId = parseInt(districtId);
 
   const {
     districtName,
@@ -135,8 +149,8 @@ app.put("/districts/:districtId", async (request, response) => {
   UPDATE 
   district
     SET
-    districtName='${districtName}',
-    stateId=${stateId},
+    district_name='${districtName}',
+    state_id=${stateId},
     cases=${cases},
     cured=${cured},
     active=${active},
@@ -144,34 +158,52 @@ app.put("/districts/:districtId", async (request, response) => {
     WHERE
     district_id = ${districtId};
   `;
-  const district = await db.run(updateDistrictQuery);
-  response.send("District details Updated");
+  await db.run(updateDistrictQuery);
+  response.send("District Details Updated");
 });
-
 
 ///API 7
 app.get("/states/:stateId/stats/", async (request, response) => {
-    let { stateId } = request.params;
-    stateId = parseInt(stateId);
+  let { stateId } = request.params;
+  stateId = parseInt(stateId);
 
-    const getStateStats = `
+  const getStateStats = `
     SELECT
-    cases, cured, active, deaths
-    FROM 
-    `
-})
-
+    SUM(cases) AS totalCases,
+     SUM(cured) AS totalCured,
+     SUM(active) AS totalActive,
+      SUM(deaths) AS totalDeaths
+    FROM
+    district
+    WHERE state_id = ${stateId}
+    GROUP BY state_id;
+    `;
+  const stateStats = await db.all(getStateStats);
+  response.send(stateStats[0]);
+});
 
 //API 8
 app.get("/districts/:districtId/details/", async (request, response) => {
-    let {districtId} = request.params;
-    districtId = parseInt(districtId);
+  let { districtId } = request.params;
+  districtId = parseInt(districtId);
 
-    const getStateOfADistrictQuery = `
+  const getStateOfADistrictQuery = `
     SELECT
     state_name
     FROM
     state
-    WHERE 
-    `
-})
+    WHERE
+    state_id = (
+        SELECT state_id
+        FROM district
+        WHERE 
+        district_id = ${districtId}
+    );`;
+  const dbResponse = await db.get(getStateOfADistrictQuery);
+  const state = {
+    stateName: dbResponse.state_name,
+  };
+  response.send(state);
+});
+
+module.exports = app;
